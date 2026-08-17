@@ -1,0 +1,18 @@
+# Installed by the deployment workflow into the website account's rootless
+# Quadlet directory on the host. The workflow replaces __IMAGE_DIGEST__ with
+# the immutable digest produced for this revision.
+[Unit]
+Description=patrickfuerst.at website
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=ghcr.io/patrickfuerst/website@__IMAGE_DIGEST__
+ContainerName=app-website
+PublishPort=127.0.0.1:18080:3000
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,148 @@
+name: Deploy website
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-production
+  cancel-in-progress: false
+
+env:
+  # ghcr repository paths must be lowercase; github.repository would carry the
+  # account's capital F.
+  IMAGE: ghcr.io/patrickfuerst/website
+
+jobs:
+  image:
+    name: Build and publish website image
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:main
+
+  deploy:
+    name: Deploy the website Quadlet
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_TARGET: website@167.233.199.85
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
+      WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require deployment secrets
+        run: |
+          for name in WEBSITE_DEPLOY_KNOWN_HOSTS WEBSITE_DEPLOY_SSH_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing production secret: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Prepare deployment files
+        env:
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          install -m 700 -d "$RUNNER_TEMP/ssh"
+          install -m 600 /dev/null "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$WEBSITE_DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
+          printf '%s\n' "$WEBSITE_DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+
+          sed "s|__IMAGE_DIGEST__|${IMAGE_DIGEST}|" deploy/app-website.container \
+            > "$RUNNER_TEMP/app-website.container"
+          chmod 600 "$RUNNER_TEMP/app-website.container"
+
+      - name: Install the website Quadlet
+        env:
+          SSH_KEY: ${{ runner.temp }}/ssh/key
+          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+        run: |
+          ssh_options=(
+            -i "$SSH_KEY"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+          )
+          ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
+            'install -d -m 700 ~/.config/containers/systemd'
+          scp "${ssh_options[@]}" "$RUNNER_TEMP/app-website.container" \
+            "$DEPLOY_TARGET":.config/containers/systemd/app-website.container
+
+      - name: Pull and activate the immutable image
+        env:
+          SSH_KEY: ${{ runner.temp }}/ssh/key
+          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+        run: |
+          ssh_options=(
+            -i "$SSH_KEY"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+          )
+          printf '%s' "$GITHUB_TOKEN" | ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
+            'set -euo pipefail
+             export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+             export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+             podman login ghcr.io --username "'"$GITHUB_ACTOR"'" --password-stdin
+             trap "podman logout ghcr.io >/dev/null" EXIT
+             systemctl --user daemon-reload
+             systemctl --user restart app-website.service'
+
+      - name: Smoke test the loopback port
+        env:
+          SSH_KEY: ${{ runner.temp }}/ssh/key
+          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+        run: |
+          ssh_options=(
+            -i "$SSH_KEY"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
+          )
+          ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
+            'for _ in $(seq 1 10); do
+               if curl -sf http://127.0.0.1:18080/ | grep -q "Patrick"; then
+                 exit 0
+               fi
+               sleep 2
+             done
+             echo "Website did not answer on 127.0.0.1:18080" >&2
+             exit 1'
