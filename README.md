@@ -28,9 +28,10 @@ not check out this repository. Caddy's rootful edge (infra repo) proxies the
 apex to the Quadlet's loopback-only port `127.0.0.1:18080`; DNS lives on
 Cloudflare, managed by the infra repo's OpenTofu.
 
-The `production` environment needs two secrets:
+The `production` environment needs three secrets:
 
 | Name | Purpose |
 |---|---|
+| `DEPLOY_TARGET` | SSH destination for the deploy account, `user@host` (kept out of this public repo; masked in Actions logs) |
 | `WEBSITE_DEPLOY_SSH_KEY` | restricted deploy key for the `website` account (1Password: `website-ssh-key-deploy`) |
-| `WEBSITE_DEPLOY_KNOWN_HOSTS` | pinned host key line for `167.233.199.85`, obtained over a trusted channel |
+| `WEBSITE_DEPLOY_KNOWN_HOSTS` | pinned host key line for the production host, obtained over a trusted channel |
