@@ -1,0 +1,20 @@
+{
+	# No admin API surface; the container is immutable and restarted to change.
+	admin off
+	# TLS is terminated at the rootful edge (infra repo); this backend is plain
+	# HTTP on loopback. HSTS therefore belongs at the edge, not here.
+	auto_https off
+}
+
+:3000 {
+	root * /srv
+	file_server
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+	}
+}

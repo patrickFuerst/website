@@ -5,14 +5,30 @@
 Description=patrickfuerst.at website
 Wants=network-online.target
 After=network-online.target
+# Keep restarting after a transient crash loop instead of giving up after the
+# systemd default (5 failures in 10s) and leaving the site down until a manual
+# reset-failed.
+StartLimitIntervalSec=0
 
 [Container]
 Image=ghcr.io/patrickfuerst/website@__IMAGE_DIGEST__
 ContainerName=app-website
 PublishPort=127.0.0.1:18080:3000
+# Hardening. The image already runs as UID 10001 with no writable state; these
+# make that explicit and strip everything a static file server never needs.
+User=10001:10001
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=ALL
+Tmpfs=/tmp:rw,mode=1777,size=8M
 
 [Service]
 Restart=always
+RestartSec=5
+# Bound resource use so a leak or request flood cannot starve the co-located
+# rootful edge Caddy on the same host.
+MemoryMax=128M
+TasksMax=64
 
 [Install]
 WantedBy=default.target
