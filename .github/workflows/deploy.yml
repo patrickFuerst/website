@@ -11,8 +11,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: website-production
-  cancel-in-progress: false
+  # PRs get their own disposable group (superseded builds are cancelled); the
+  # production line stays serialized and is never cancelled mid-deploy.
+  group: website-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # ghcr repository paths must be lowercase; github.repository would carry the
@@ -20,8 +22,27 @@ env:
   IMAGE: ghcr.io/patrickfuerst/website
 
 jobs:
-  image:
+  build:
+    name: Build website image (PR check)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Contributor-controlled build context runs here, so grant no registry
+    # write: this job only proves the image builds, it never publishes.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          push: false
+
+  publish:
     name: Build and publish website image
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}
@@ -33,7 +54,6 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Log in to GitHub Container Registry
-        if: github.ref == 'refs/heads/main'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
@@ -45,14 +65,14 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
-          push: ${{ github.ref == 'refs/heads/main' }}
+          push: true
           tags: |
             ${{ env.IMAGE }}:sha-${{ github.sha }}
             ${{ env.IMAGE }}:main
 
   deploy:
     name: Deploy the website Quadlet
-    needs: image
+    needs: publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -61,14 +81,14 @@ jobs:
       packages: read
     env:
       DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
-      WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Require deployment secrets
+        env:
+          WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
+          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
         run: |
           for name in DEPLOY_TARGET WEBSITE_DEPLOY_KNOWN_HOSTS WEBSITE_DEPLOY_SSH_KEY; do
             if [[ -z "${!name}" ]]; then
@@ -79,7 +99,9 @@ jobs:
 
       - name: Prepare deployment files
         env:
-          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+          WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
+          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
         run: |
           if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Refusing to deploy: image digest missing or malformed: '${IMAGE_DIGEST}'" >&2
@@ -115,6 +137,8 @@ jobs:
         env:
           SSH_KEY: ${{ runner.temp }}/ssh/key
           SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
           ssh_options=(
             -i "$SSH_KEY"
@@ -122,12 +146,19 @@ jobs:
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
           )
+          # Pull the exact digest while authenticated, then drop the credential
+          # immediately; the Quadlet restart runs against the local image and
+          # never needs registry auth. The trap is the fallback if the pull
+          # errors before the explicit logout.
           printf '%s' "$GITHUB_TOKEN" | ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
             'set -euo pipefail
              export XDG_RUNTIME_DIR="/run/user/$(id -u)"
              export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+             image="ghcr.io/patrickfuerst/website@'"$IMAGE_DIGEST"'"
              podman login ghcr.io --username "'"$GITHUB_ACTOR"'" --password-stdin
              trap "podman logout ghcr.io >/dev/null 2>&1 || true" EXIT
+             podman pull "$image"
+             podman logout ghcr.io >/dev/null 2>&1 || true
              systemctl --user daemon-reload
              systemctl --user restart app-website.service'
 

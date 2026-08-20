@@ -2,3 +2,9 @@
 .github
 deploy
 README.md
+
+# Never let local editor/OS cruft leak into the served image.
+**/.DS_Store
+**/*~
+**/.env
+**/.env.*
