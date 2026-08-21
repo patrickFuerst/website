@@ -70,115 +70,82 @@ jobs:
             ${{ env.IMAGE }}:sha-${{ github.sha }}
             ${{ env.IMAGE }}:main
 
-  deploy:
-    name: Deploy the website Quadlet
+  # This repository owns the image; the infra repository owns the Quadlet,
+  # image selection, host deployment, and verification. Promotion dispatches
+  # infra's promote-application.yml release contract with a GitHub App token
+  # scoped to Actions read/write on the infra repository alone — this CI holds
+  # no host, TLS, or variable-write credential.
+  promote:
+    name: Promote through Infra
     needs: publish
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      packages: read
     env:
-      DEPLOY_TARGET: ${{ secrets.DEPLOY_TARGET }}
+      INFRA_REPOSITORY: patrickFuerst/infra
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Require deployment secrets
+      - name: Require the deployment App credentials
         env:
-          WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
-          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
+          CLIENT_ID: ${{ vars.PF_DEPLOY_APP_CLIENT_ID }}
+          PRIVATE_KEY: ${{ secrets.PF_DEPLOY_APP_PRIVATE_KEY }}
         run: |
-          for name in DEPLOY_TARGET WEBSITE_DEPLOY_KNOWN_HOSTS WEBSITE_DEPLOY_SSH_KEY; do
-            if [[ -z "${!name}" ]]; then
-              echo "Missing production secret: ${name}" >&2
-              exit 1
-            fi
-          done
-
-      - name: Prepare deployment files
-        env:
-          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
-          WEBSITE_DEPLOY_KNOWN_HOSTS: ${{ secrets.WEBSITE_DEPLOY_KNOWN_HOSTS }}
-          WEBSITE_DEPLOY_SSH_KEY: ${{ secrets.WEBSITE_DEPLOY_SSH_KEY }}
-        run: |
-          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Refusing to deploy: image digest missing or malformed: '${IMAGE_DIGEST}'" >&2
+          if [[ -z "$CLIENT_ID" ]]; then
+            echo "The PF_DEPLOY_APP_CLIENT_ID repository variable is not configured." >&2
+            exit 1
+          fi
+          if [[ -z "$PRIVATE_KEY" ]]; then
+            echo "The PF_DEPLOY_APP_PRIVATE_KEY repository secret is not configured." >&2
             exit 1
           fi
 
-          install -m 700 -d "$RUNNER_TEMP/ssh"
-          install -m 600 /dev/null "$RUNNER_TEMP/ssh/key"
-          printf '%s\n' "$WEBSITE_DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/key"
-          printf '%s\n' "$WEBSITE_DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
-
-          sed "s|__IMAGE_DIGEST__|${IMAGE_DIGEST}|" deploy/app-website.container \
-            > "$RUNNER_TEMP/app-website.container"
-          chmod 600 "$RUNNER_TEMP/app-website.container"
-
-      - name: Install the website Quadlet
+      - name: Require a digest-pinned image
         env:
-          SSH_KEY: ${{ runner.temp }}/ssh/key
-          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
-        run: |
-          ssh_options=(
-            -i "$SSH_KEY"
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
-          )
-          ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
-            'install -d -m 700 ~/.config/containers/systemd'
-          scp "${ssh_options[@]}" "$RUNNER_TEMP/app-website.container" \
-            "$DEPLOY_TARGET":.config/containers/systemd/app-website.container
-
-      - name: Pull and activate the immutable image
-        env:
-          SSH_KEY: ${{ runner.temp }}/ssh/key
-          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
-          ssh_options=(
-            -i "$SSH_KEY"
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
-          )
-          # Pull the exact digest while authenticated, then drop the credential
-          # immediately; the Quadlet restart runs against the local image and
-          # never needs registry auth. The trap is the fallback if the pull
-          # errors before the explicit logout.
-          printf '%s' "$GITHUB_TOKEN" | ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
-            'set -euo pipefail
-             export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-             export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
-             image="ghcr.io/patrickfuerst/website@'"$IMAGE_DIGEST"'"
-             podman login ghcr.io --username "'"$GITHUB_ACTOR"'" --password-stdin
-             trap "podman logout ghcr.io >/dev/null 2>&1 || true" EXIT
-             podman pull "$image"
-             podman logout ghcr.io >/dev/null 2>&1 || true
-             systemctl --user daemon-reload
-             systemctl --user restart app-website.service'
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Refusing to promote: image digest missing or malformed: '${IMAGE_DIGEST}'" >&2
+            exit 1
+          fi
 
-      - name: Smoke test the loopback port
+      - name: Create a scoped Infra token
+        id: infra-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.PF_DEPLOY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PF_DEPLOY_APP_PRIVATE_KEY }}
+          owner: patrickFuerst
+          repositories: infra
+
+      - name: Dispatch the Infra promotion
         env:
-          SSH_KEY: ${{ runner.temp }}/ssh/key
-          SSH_KNOWN_HOSTS: ${{ runner.temp }}/ssh/known_hosts
+          GH_TOKEN: ${{ steps.infra-token.outputs.token }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
         run: |
-          ssh_options=(
-            -i "$SSH_KEY"
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$SSH_KNOWN_HOSTS"
-          )
-          ssh "${ssh_options[@]}" "$DEPLOY_TARGET" \
-            'for _ in $(seq 1 10); do
-               if curl -sf http://127.0.0.1:18080/ | grep -q "Patrick"; then
-                 exit 0
-               fi
-               sleep 2
-             done
-             echo "Website did not answer on 127.0.0.1:18080" >&2
-             exit 1'
+          gh workflow run promote-application.yml --repo "$INFRA_REPOSITORY" --ref main \
+            --field application=website \
+            --field source_sha="$GITHUB_SHA" \
+            --field image="${IMAGE}@${IMAGE_DIGEST}"
+
+      - name: Wait for the Infra promotion
+        env:
+          GH_TOKEN: ${{ steps.infra-token.outputs.token }}
+        run: |
+          promotion_name="Promote website $GITHUB_SHA"
+          run_id=""
+          for _ in {1..30}; do
+            run_id=$(
+              gh run list --repo "$INFRA_REPOSITORY" \
+                --workflow promote-application.yml \
+                --event workflow_dispatch --limit 20 \
+                --json databaseId,displayTitle \
+                | jq -r --arg name "$promotion_name" \
+                    '.[] | select(.displayTitle == $name) | .databaseId' \
+                | head -n 1
+            )
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Could not find the dispatched Infra promotion." >&2
+            exit 1
+          fi
+          gh run watch "$run_id" --repo "$INFRA_REPOSITORY" --exit-status --interval 10
