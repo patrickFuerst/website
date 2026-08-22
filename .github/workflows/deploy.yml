@@ -148,14 +148,18 @@ jobs:
           promotion_name="Promote website $GITHUB_SHA"
           run_id=""
           for _ in {1..30}; do
+            # A re-promotion of the same commit shares its display title with
+            # the earlier, already-completed promotion run; prefer whichever
+            # matching run is still queued or executing.
             run_id=$(
               gh run list --repo "$INFRA_REPOSITORY" \
                 --workflow promote-application.yml \
                 --event workflow_dispatch --limit 20 \
-                --json databaseId,displayTitle \
+                --json databaseId,displayTitle,status \
                 | jq -r --arg name "$promotion_name" \
-                    '.[] | select(.displayTitle == $name) | .databaseId' \
-                | head -n 1
+                    '[.[] | select(.displayTitle == $name)]
+                     | (map(select(.status != "completed")) + .)
+                     | .[0].databaseId // empty'
             )
             [[ -n "$run_id" ]] && break
             sleep 2
