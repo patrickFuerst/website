@@ -61,6 +61,24 @@
       main:has(.expand-toggle:checked) h1 {
         font-size: clamp(1.25rem, 2.5vw, 1.75rem);
       }
+      .hero-links {
+        margin-top: 1.1rem;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .hero-links a {
+        color: var(--ink);
+        text-decoration: none;
+        border-bottom: 1px solid var(--faint);
+        transition: border-color 0.2s ease;
+      }
+      .hero-links a:hover {
+        border-bottom-color: var(--ink);
+      }
+      main:has(.expand-toggle:checked) .hero-links {
+        margin-top: 0.5rem;
+      }
 
       /* visually hidden checkbox drives the expand state, no JS needed */
       .expand-toggle {
@@ -226,6 +244,10 @@
       <input type="checkbox" id="expand" class="expand-toggle" />
       <header class="hero">
         <h1>Hi, I'm Patrick</h1>
+        <p class="hero-links">
+          <a href="/hairymess/">hairy&nbsp;mess</a> — GPU fur simulation, live
+          in your browser
+        </p>
       </header>
       <section class="stream" aria-label="Thoughts my AI agents had along the way">
         <label class="stream-label" for="expand"><span class="chev" aria-hidden="true">❯</span>thoughts my agents had along the way</label>

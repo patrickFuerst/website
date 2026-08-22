@@ -6,7 +6,13 @@ a container image.
 - `public/` — the static site
 - `Caddyfile` — serves `public/` on port 3000 and sets response security
   headers (HSTS is left to the rootful edge, which terminates TLS)
-- `Dockerfile` — Caddy image running as a non-root user on port 3000
+- `Dockerfile` — Caddy image running as a non-root user on port 3000; it also
+  copies the prebuilt [hairymess](https://github.com/patrickFuerst/hairymess_web)
+  WebGPU demo out of the public `ghcr.io/patrickfuerst/hairymess-web` package
+  (digest-pinned) and serves it under `/hairymess/` with its own, slightly
+  wider CSP (`script-src 'self'` etc. — see the Caddyfile). To update the
+  demo, push `hairymess_web`, take the digest its "Publish demo image" run
+  prints in the step summary, and bump the pin in the Dockerfile.
 
 The rootless Podman Quadlet that runs the image lives in the
 [infra](https://github.com/patrickFuerst/infra) repository
