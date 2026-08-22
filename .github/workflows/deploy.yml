@@ -115,6 +115,22 @@ jobs:
           owner: patrickFuerst
           repositories: infra
 
+      # Recorded from here because infra's own workflow token cannot write
+      # repository variables; infra's promote workflow refuses to deploy
+      # unless this recorded release matches the dispatched one exactly.
+      - name: Record the release selection
+        env:
+          GH_TOKEN: ${{ steps.infra-token.outputs.token }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          release=$(
+            jq -cn \
+              --arg source_sha "$GITHUB_SHA" \
+              --arg image "${IMAGE}@${IMAGE_DIGEST}" \
+              '{source_sha: $source_sha, image: $image}'
+          )
+          gh variable set WEBSITE_RELEASE --repo "$INFRA_REPOSITORY" --body "$release"
+
       - name: Dispatch the Infra promotion
         env:
           GH_TOKEN: ${{ steps.infra-token.outputs.token }}
