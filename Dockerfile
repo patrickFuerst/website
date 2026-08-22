@@ -13,6 +13,12 @@ RUN addgroup -g 10001 -S web \
 COPY --chown=10001:10001 Caddyfile /etc/caddy/Caddyfile
 COPY --chown=10001:10001 public/ /srv/
 
+# The WebGPU fur demo, prebuilt by the hairymess_web repository's CI as a
+# filesystem-only image (tag sha-f7f99d59d1d98eed3f30bb24e79a9df5185d0d97,
+# public package). Bump by pinning the digest a newer "Publish demo image"
+# run prints in its step summary.
+COPY --from=ghcr.io/patrickfuerst/hairymess-web@sha256:e098b5e42e2669a9e6ae5f340121d6729816ca60c4076e3a5a7763e521e5cbad --chown=10001:10001 /dist /srv/hairymess/
+
 # Keep every writable path caddy touches inside a single tmpfs mount, so the
 # rest of the root filesystem can be mounted read-only at runtime.
 ENV XDG_CONFIG_HOME=/tmp XDG_DATA_HOME=/tmp

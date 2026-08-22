@@ -8,15 +8,49 @@
 
 :3000 {
 	root * /srv
-	file_server
 
-	header {
-		-Server
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
-		X-Frame-Options DENY
-		# index.html is fully static (scripts/embed-highlights.py bakes the
-		# quote stream in), so only inline styles need allowing.
-		Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+	# The 2015 project page URL, resurrected as the live demo.
+	redir /projects/hairy-mess /hairymess/ permanent
+	redir /projects/hairy-mess/ /hairymess/ permanent
+
+	# The WebGPU fur demo (ghcr.io/patrickfuerst/hairymess-web, copied into
+	# the image at /srv/hairymess). It runs same-origin ES modules and fetches
+	# its model binary, so this path needs script-src/connect-src that the
+	# rest of the site deliberately goes without; lil-gui also injects a style
+	# element at runtime, hence style-src 'unsafe-inline'.
+	@hairymess path /hairymess /hairymess/*
+	handle @hairymess {
+		file_server
+		# The 1.4 MB model halves over the wire; the hashed JS shrinks ~3x.
+		# encode's default content-type allowlist skips the model's
+		# application/octet-stream, so restate it plus the defaults we serve.
+		encode zstd gzip {
+			match {
+				header Content-Type application/octet-stream*
+				header Content-Type application/json*
+				header Content-Type text/*
+			}
+		}
+		header {
+			-Server
+			X-Content-Type-Options nosniff
+			Referrer-Policy strict-origin-when-cross-origin
+			X-Frame-Options DENY
+			Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self'; font-src data:; base-uri 'none'; frame-ancestors 'none'"
+		}
+	}
+
+	handle {
+		file_server
+
+		header {
+			-Server
+			X-Content-Type-Options nosniff
+			Referrer-Policy strict-origin-when-cross-origin
+			X-Frame-Options DENY
+			# index.html is fully static (scripts/embed-highlights.py bakes the
+			# quote stream in), so only inline styles need allowing.
+			Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'"
+		}
 	}
 }
