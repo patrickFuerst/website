@@ -40,7 +40,10 @@ apex to the Quadlet's loopback-only port `127.0.0.1:18080`; DNS lives on
 Cloudflare, managed by the infra repo's OpenTofu.
 
 Promotion authenticates with the `pf-infra-deploy` GitHub App, installed on
-the infra repository with only the **Actions: read and write** permission:
+the infra repository with only the **Actions: read and write** and
+**Variables: read and write** permissions — this CI records the release in
+infra's `WEBSITE_RELEASE` variable (infra's own workflow token cannot write
+variables) and infra verifies the recorded release before deploying:
 
 | Location | Name | Purpose |
 |---|---|---|
